@@ -1,0 +1,39 @@
+{
+  "name": "opencode-commandcode",
+  "version": "1.0.0",
+  "description": "OpenCode V2 plugin: use Command Code API models (Claude/GPT/Gemini/DeepSeek/Qwen/Kimi/GLM) with a single API key.",
+  "type": "module",
+  "exports": {
+    ".": "./commandcode.ts",
+    "./server": "./commandcode.ts"
+  },
+  "keywords": [
+    "opencode",
+    "opencode-plugin",
+    "commandcode",
+    "ai",
+    "claude",
+    "gpt",
+    "gemini",
+    "deepseek",
+    "qwen",
+    "kimi",
+    "glm"
+  ],
+  "license": "MIT",
+  "author": "hwcwy",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/hwcwy/opencode-commandcode.git"
+  },
+  "homepage": "https://github.com/hwcwy/opencode-commandcode#readme",
+  "bugs": {
+    "url": "https://github.com/hwcwy/opencode-commandcode/issues"
+  },
+  "files": [
+    "commandcode.ts",
+    "README.md",
+    "LICENSE",
+    "install.ps1"
+  ]
+}

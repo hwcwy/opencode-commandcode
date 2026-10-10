@@ -1,6 +1,6 @@
 # Command Code Provider for OpenCode V2
 
-把 Command Code API 的 90+ 模型接入 OpenCode V2 的本地插件。
+把 Command Code API 的 90+ 模型接入 OpenCode V2 的插件。
 
 这是 [@herouucn/opencode-commandcode](https://github.com/herouu/opencode-commandcode)
 的 **V2 移植版**：原插件使用 V1 插件 API（`config` / `auth` 钩子），在 OpenCode 2
@@ -21,19 +21,29 @@ and an effect or setup function.`）。本插件用 V2 插件 API 重新实现�
 
 | 文件 | 说明 |
 | --- | --- |
-| `commandcode.ts` | 插件源码（就是 OpenCode 加载的那个文件） |
-| `install.ps1` | 把插件复制到全局插件目录 |
+| `commandcode.ts` | 插件源码（OpenCode 加载的入口） |
+| `package.json` | 插件包清单，`exports["./server"]` 指向插件入口 |
+| `install.ps1` | 方式二：把插件复制到全局插件目录 |
 | `README.md` | 本文档 |
 
-## 安装 / 更新
+## 安装
 
-插件当前生效位置：
+### 方式一：OpenCode 内置命令（推荐）
 
+```powershell
+opencode plugin add github:hwcwy/opencode-commandcode
 ```
-%USERPROFILE%\.config\opencode\plugins\commandcode.ts
+
+它会把 `github:hwcwy/opencode-commandcode` 写入全局 `opencode.json(c)` 的 `plugins`，并缓存安装包。更新 / 查看：
+
+```powershell
+opencode plugin update opencode-commandcode
+opencode plugin list
 ```
 
-从本目录同步过去（OpenCode 会监听该文件并自动热重载）：
+### 方式二：本地插件文件
+
+把 `commandcode.ts` 复制到全局插件目录（OpenCode 会监听并自动热重载）：
 
 ```powershell
 pwsh -File .\install.ps1
@@ -49,6 +59,8 @@ Copy-Item .\commandcode.ts "$env:USERPROFILE\.config\opencode\plugins\commandcod
 > ```jsonc
 > { "plugins": ["file:///C:/Users/hcy34/Desktop/opencode-command/commandcode.ts"] }
 > ```
+
+> 两种方式**只选其一**，同时使用会重复注册 provider。
 
 ## 配置凭据（二选一）
 
@@ -101,9 +113,22 @@ opencode run --model commandcode/deepseek-v4-flash "hi"
 
 ## 卸载
 
+内置命令安装的：
+
+```powershell
+opencode plugin remove opencode-commandcode
+```
+
+本地文件安装的：
+
 ```powershell
 Remove-Item "$env:USERPROFILE\.config\opencode\plugins\commandcode.ts"
-opencode auth logout commandcode   # 如需删除已保存的凭据
+```
+
+如需删除已保存的凭据：
+
+```powershell
+opencode auth logout commandcode
 ```
 
 ## 致谢
