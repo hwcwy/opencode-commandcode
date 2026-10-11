@@ -28,6 +28,12 @@ const DEFAULT_CATALOG_URL =
 const CACHE_KEY = "catalog"
 const FETCH_TIMEOUT_MS = 8000
 
+// Command Code serves OpenAI-style models through its OpenAI-compatible
+// /chat/completions route, but Claude models only through the Anthropic
+// Messages route (/messages). Register Claude models with the matching runtime.
+const OPENAI_COMPATIBLE = "@opencode/ai/providers/openai-compatible"
+const ANTHROPIC_COMPATIBLE = "@opencode/ai/providers/anthropic-compatible"
+
 interface ModelEntry {
   id: string
   name?: string
@@ -62,6 +68,12 @@ async function fetchCatalog(url: string): Promise<ModelEntry[] | null> {
   } catch {
     return null
   }
+}
+
+/** Claude models must use the Anthropic Messages runtime; everything else is OpenAI-compatible. */
+function packageFor(entry: ModelEntry): string {
+  const id = entry.id.toLowerCase()
+  return id.startsWith("claude") || id.startsWith("anthropic/") ? ANTHROPIC_COMPATIBLE : OPENAI_COMPATIBLE
 }
 
 /** Same key mapping the V1 plugin used: part after "/", lowercased. */
@@ -122,6 +134,7 @@ function toOpenCodeModels(providerID: string, entries: ModelEntry[]) {
       ...Model.Info.default(providerID, id),
       name: entry.name && entry.name.length > 0 ? entry.name : entry.id,
       modelID: entry.id,
+      package: packageFor(entry),
       capabilities: {
         tools: entry.tool_call !== false,
         input: input && input.length > 0 ? input : ["text"],
@@ -185,7 +198,7 @@ export default Plugin.define({
           ...Provider.Info.empty(PROVIDER_ID),
           name: "Command Code",
           activation: "enabled",
-          package: "@opencode/ai/providers/openai-compatible",
+          package: OPENAI_COMPATIBLE,
           integrationID: INTEGRATION_ID,
           settings: { baseURL: DEFAULT_BASE_URL },
         },

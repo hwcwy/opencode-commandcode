@@ -125,6 +125,9 @@ opencode service set env COMMANDCODE_CATALOG_URL disabled
   `env`（`COMMANDCODE_API_KEY`）与 `key` 两种方法，OpenCode 负责把凭据注入请求。
 - **包入口**：OpenCode 的包插件加载器优先解析 `exports["./server"]`、回退 `exports["."]`，
   两者都指向 `commandcode.ts`。
+- **Claude 路由**：Command Code 的 Claude 系只能走 Anthropic Messages 接口
+  （`/provider/v1/messages`），因此这些模型在**模型级**使用 `anthropic-compatible`
+  运行时（`x-api-key` 鉴权），其余模型用 `openai-compatible`（`/chat/completions`）。
 
 ## 与原插件的差异
 
@@ -137,6 +140,10 @@ opencode service set env COMMANDCODE_CATALOG_URL disabled
 - 目录中个别免费模型（如 `minimax-m3-free` / `MiniMaxAI/MiniMax-M3-Free`）为
   Command Code 官方 CLI 专用，通过 API 会返回
   `... is only available in the Command Code CLI.`，属上游限制。
+- Claude 系对攻防/漏洞利用类内容会触发 Anthropic 的 **cyber safeguard** 拦截
+  （`Provider blocked the response (cyber)`），属上游策略；CTF 建议以 GLM / DeepSeek 系为主力。
+- 部分高阶 OpenAI 模型（如 `GPT-6.1 Sol`）不在 GOAT 套餐内，会返回
+  `MODEL_NOT_IN_PLAN`，需要 Pro / Max 或按量付费。
 
 ## 卸载
 
