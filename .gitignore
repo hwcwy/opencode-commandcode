@@ -9,5 +9,8 @@ Thumbs.db
 # Node
 node_modules/
 
+# OpenCode runtime artifacts
+.opencode/
+
 # Logs
 *.log

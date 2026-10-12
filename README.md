@@ -130,8 +130,8 @@ opencode service set env COMMANDCODE_CATALOG_URL disabled
   运行时（`x-api-key` 鉴权），其余模型用 `openai-compatible`（`/chat/completions`）。
 - **内容兼容**：Command Code 只接受 **text 与 image**。插件在 `context` 钩子里把
   **文档附件**（含 tool result 里的文档）改写为指向工作区文件的 **markdown 文件引用**
-  （内联附件按内容哈希落盘到 `.opencode/attachments/`），模型可自行决定是否用工具读取；
-  同时把对话中的 `system` 角色消息并入顶层 system 提示。
+  （内联附件按内容哈希落盘到 `.opencode/attachments/`，该目录自带 `.gitignore`，不会进版本库），
+  模型可自行决定是否用工具读取；同时把对话中的 `system` 角色消息并入顶层 system 提示。
 
 ## 与原插件的差异
 

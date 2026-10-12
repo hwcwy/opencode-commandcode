@@ -197,6 +197,9 @@ function storeAttachment(base64: string, name: string, mime: string, workspace: 
   const hash = createHash("sha1").update(base64).digest("hex").slice(0, 8)
   const dir = join(workspace, ATTACHMENT_DIR)
   mkdirSync(dir, { recursive: true })
+  // Keep the derived attachments out of version control without touching the user's ignores.
+  const ignoreFile = join(dir, ".gitignore")
+  if (!existsSync(ignoreFile)) writeFileSync(ignoreFile, "*\n")
   const file = join(dir, `${hash}${extensionFor(name, mime)}`)
   if (!existsSync(file)) writeFileSync(file, Buffer.from(base64, "base64"))
   return fileUrl(file)
