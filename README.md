@@ -128,6 +128,10 @@ opencode service set env COMMANDCODE_CATALOG_URL disabled
 - **Claude 路由**：Command Code 的 Claude 系只能走 Anthropic Messages 接口
   （`/provider/v1/messages`），因此这些模型在**模型级**使用 `anthropic-compatible`
   运行时（`x-api-key` 鉴权），其余模型用 `openai-compatible`（`/chat/completions`）。
+- **内容兼容**：Command Code 只接受 **text 与 image**。插件在 `context` 钩子里把
+  **文档附件**（含 tool result 里的文档）改写为指向工作区文件的 **markdown 文件引用**
+  （内联附件按内容哈希落盘到 `.opencode/attachments/`），模型可自行决定是否用工具读取；
+  同时把对话中的 `system` 角色消息并入顶层 system 提示。
 
 ## 与原插件的差异
 
@@ -137,6 +141,8 @@ opencode service set env COMMANDCODE_CATALOG_URL disabled
 
 ## 已知限制
 
+- Command Code 不接受 PDF / 文档块：附件会被改写为**文件引用**（见「实现要点」），
+  模型需用自己的工具去读（如本机用 `python` + `pymupdf` 解析 PDF）。
 - 目录中个别免费模型（如 `minimax-m3-free` / `MiniMaxAI/MiniMax-M3-Free`）为
   Command Code 官方 CLI 专用，通过 API 会返回
   `... is only available in the Command Code CLI.`，属上游限制。

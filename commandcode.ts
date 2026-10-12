@@ -17,8 +17,16 @@
  *  - COMMANDCODE_CATALOG_URL: alternate catalog URL, or `disabled` to skip fetching.
  *
  * On fetch failure the last successfully fetched catalog is reused from plugin storage.
+ *
+ * Command Code's Provider API accepts only text and image content, so this plugin rewrites
+ * what it rejects: document attachments (including documents inside tool results) become
+ * markdown file references the model can open with its own tools, and mid-conversation
+ * system-role messages move into the top-level system prompt.
  */
 import { Plugin, Provider, Model } from "@opencode/plugin"
+import { createHash } from "node:crypto"
+import { existsSync, mkdirSync, writeFileSync } from "node:fs"
+import { join } from "node:path"
 
 const PROVIDER_ID = "commandcode"
 const INTEGRATION_ID = "commandcode"
@@ -27,6 +35,7 @@ const DEFAULT_CATALOG_URL =
   "https://raw.githubusercontent.com/herouu/opencode-commandcode/main/models.json"
 const CACHE_KEY = "catalog"
 const FETCH_TIMEOUT_MS = 8000
+const ATTACHMENT_DIR = ".opencode/attachments"
 
 // Command Code serves OpenAI-style models through its OpenAI-compatible
 // /chat/completions route, but Claude models only through the Anthropic
@@ -163,6 +172,63 @@ function toOpenCodeModels(providerID: string, entries: ModelEntry[]) {
   return models
 }
 
+type ContentPart = Record<string, any>
+
+/** Keep attachment file names filesystem-safe; stored names are hashed anyway. */
+function sanitizeName(name: string): string {
+  const cleaned = name.replace(/[\\/:*?"<>|\u0000-\u001f]/g, "_").trim()
+  return cleaned.length > 0 ? cleaned.slice(0, 120) : "attachment"
+}
+
+function extensionFor(name: string, mime: string): string {
+  const fromName = name.includes(".") ? name.slice(name.lastIndexOf(".")).toLowerCase() : ""
+  if (/^\.[a-z0-9]{1,5}$/.test(fromName)) return fromName
+  if (mime.includes("pdf")) return ".pdf"
+  if (mime.includes("text")) return ".txt"
+  return ".bin"
+}
+
+function fileUrl(absPath: string): string {
+  return `file:///${absPath.replace(/\\/g, "/")}`
+}
+
+/** Materialize inline bytes inside the workspace so the model can read them back. */
+function storeAttachment(base64: string, name: string, mime: string, workspace: string): string {
+  const hash = createHash("sha1").update(base64).digest("hex").slice(0, 8)
+  const dir = join(workspace, ATTACHMENT_DIR)
+  mkdirSync(dir, { recursive: true })
+  const file = join(dir, `${hash}${extensionFor(name, mime)}`)
+  if (!existsSync(file)) writeFileSync(file, Buffer.from(base64, "base64"))
+  return fileUrl(file)
+}
+
+function isImageMime(mime: string): boolean {
+  return mime.startsWith("image/")
+}
+
+/** Markdown reference the model can open itself, or null when it cannot be expressed. */
+function fileReference(uri: string, mime: string, name: string, workspace: string): string | null {
+  const dataUrl = /^data:([^;]*);base64,(.*)$/is.exec(uri)
+  if (dataUrl) return `[${name}](${storeAttachment(dataUrl[2], name, mime || dataUrl[1], workspace)})`
+  if (/^https?:\/\//i.test(uri)) return `[${name}](${uri})`
+  if (uri.startsWith("file:")) return `[${name}](${fileUrl(decodeURIComponent(uri.replace(/^file:\/\/\/?/i, "")))})`
+  if (uri.length > 64 && /^[A-Za-z0-9+/=\s]+$/.test(uri)) return `[${name}](${storeAttachment(uri, name, mime, workspace)})`
+  return null
+}
+
+/** Command Code rejects document parts, so swap them for a file reference. */
+function convertDocumentPart(part: ContentPart, workspace: string): ContentPart | null {
+  const media = part.media ?? {}
+  const source = media.source ?? {}
+  const mime = String(media.mediaType ?? source.mediaType ?? "").toLowerCase()
+  const kind = String(media.kind ?? "")
+  if (kind !== "document" && (mime.length === 0 || isImageMime(mime))) return null
+  const name = sanitizeName(String(part.filename ?? "attachment"))
+  const uri = typeof source.url === "string" ? source.url : typeof source.data === "string" ? source.data : ""
+  const reference = fileReference(uri, mime, name, workspace)
+  return reference ? { type: "text", text: reference } : null
+}
+
 export default Plugin.define({
   id: "commandcode",
   async setup(ctx) {
@@ -218,6 +284,49 @@ export default Plugin.define({
       editor.update(INTEGRATION_ID, (integration) => {
         integration.name = "Command Code"
       })
+    })
+
+    // Command Code accepts only text and image content. Rewrite what it rejects:
+    // document attachments (and documents inside tool results) become markdown file
+    // references the model can open itself, and mid-conversation system-role messages
+    // move into the top-level system prompt.
+    await ctx.session.hook("context", (event) => {
+      if (event.model?.providerID !== PROVIDER_ID) return
+      const workspace = ctx.location.directory
+      const messages = (event.messages ?? []) as ContentPart[]
+
+      for (const message of messages) {
+        if (!Array.isArray(message?.content)) continue
+        message.content = (message.content as ContentPart[]).map((part) => {
+          if (part?.type === "media") return convertDocumentPart(part, workspace) ?? part
+          if (part?.type === "tool-result" && Array.isArray(part.result?.value)) {
+            part.result.value = (part.result.value as ContentPart[]).map((item) => {
+              if (!item || item.type !== "file") return item
+              const mime = String(item.mime ?? "").toLowerCase()
+              if (isImageMime(mime)) return item
+              const name = sanitizeName(String(item.name ?? "attachment"))
+              return fileReference(String(item.uri ?? ""), mime, name, workspace) ?? item
+            })
+          }
+          return part
+        })
+      }
+
+      for (let index = messages.length - 1; index >= 0; index--) {
+        const message = messages[index]
+        if (message?.role !== "system") continue
+        const content = message.content
+        const text = Array.isArray(content)
+          ? (content as ContentPart[])
+              .filter((part) => part?.type === "text" && typeof part.text === "string")
+              .map((part) => String(part.text))
+              .join("\n\n")
+          : typeof content === "string"
+            ? content
+            : ""
+        if (text.trim().length > 0) event.system.push({ type: "text", text })
+        messages.splice(index, 1)
+      }
     })
 
     console.log(`[commandcode] provider ready with ${models.length} models (catalog: ${source})`)
