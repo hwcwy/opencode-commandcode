@@ -132,6 +132,10 @@ opencode service set env COMMANDCODE_CATALOG_URL disabled
   **文档附件**（含 tool result 里的文档）改写为指向工作区文件的 **markdown 文件引用**
   （内联附件按内容哈希落盘到 `.opencode/attachments/`，该目录自带 `.gitignore`，不会进版本库），
   模型可自行决定是否用工具读取；同时把对话中的 `system` 角色消息并入顶层 system 提示。
+- **Thinking 块**：Claude 的 thinking 块签名绑定会话前缀，system 提示一变（OpenCode 会随
+  tools/MCP 变化重写它）上游就报 `Invalid signature in thinking block`。官方解法
+  （`thinking.block_binding=drop_block` + `anthropic-beta` 头）经测试**不被 Command Code 透传**，
+  因此插件在发送前**丢弃回放的 thinking 块**（仅 Claude 模型）。
 
 ## 与原插件的差异
 

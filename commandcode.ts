@@ -80,9 +80,13 @@ async function fetchCatalog(url: string): Promise<ModelEntry[] | null> {
 }
 
 /** Claude models are served by Command Code through the Anthropic Messages route. */
+function isClaudeModel(id: unknown): boolean {
+  const value = String(id ?? "").toLowerCase()
+  return value.startsWith("claude") || value.startsWith("anthropic/")
+}
+
 function isClaudeEntry(entry: ModelEntry): boolean {
-  const id = entry.id.toLowerCase()
-  return id.startsWith("claude") || id.startsWith("anthropic/")
+  return isClaudeModel(entry.id)
 }
 
 /** Same key mapping the V1 plugin used: part after "/", lowercased. */
@@ -145,16 +149,6 @@ function toOpenCodeModels(providerID: string, entries: ModelEntry[]) {
       name: entry.name && entry.name.length > 0 ? entry.name : entry.id,
       modelID: entry.id,
       package: claude ? ANTHROPIC_COMPATIBLE : OPENAI_COMPATIBLE,
-      ...(claude
-        ? {
-            // Replaying a thinking block under a changed system prompt is rejected unless the
-            // block is dropped when the prefix mismatches. The setting needs its beta header.
-            headers: { "anthropic-beta": "thinking-binding-controls-2026-08-01" },
-            settings: {
-              thinking: { type: "adaptive", block_binding: { prefix_mismatch_behavior: "drop_block" } },
-            },
-          }
-        : {}),
       capabilities: {
         tools: entry.tool_call !== false,
         input: input && input.length > 0 ? input : ["text"],
@@ -324,6 +318,18 @@ export default Plugin.define({
           }
           return part
         })
+      }
+
+      // Replayed thinking blocks carry a signature bound to the conversation prefix. Any
+      // system-prompt change (OpenCode rewrites it as tools and MCP servers change) makes the
+      // upstream reject them with "Invalid signature in thinking block". Command Code's route
+      // does not forward the anthropic-beta header that would let the block be dropped
+      // server-side, so drop replayed thinking blocks here.
+      if (isClaudeModel(event.model?.id)) {
+        for (const message of messages) {
+          if (message?.role !== "assistant" || !Array.isArray(message.content)) continue
+          message.content = (message.content as ContentPart[]).filter((part) => part?.type !== "reasoning")
+        }
       }
 
       for (let index = messages.length - 1; index >= 0; index--) {
