@@ -79,10 +79,10 @@ async function fetchCatalog(url: string): Promise<ModelEntry[] | null> {
   }
 }
 
-/** Claude models must use the Anthropic Messages runtime; everything else is OpenAI-compatible. */
-function packageFor(entry: ModelEntry): string {
+/** Claude models are served by Command Code through the Anthropic Messages route. */
+function isClaudeEntry(entry: ModelEntry): boolean {
   const id = entry.id.toLowerCase()
-  return id.startsWith("claude") || id.startsWith("anthropic/") ? ANTHROPIC_COMPATIBLE : OPENAI_COMPATIBLE
+  return id.startsWith("claude") || id.startsWith("anthropic/")
 }
 
 /** Same key mapping the V1 plugin used: part after "/", lowercased. */
@@ -136,6 +136,7 @@ function toOpenCodeModels(providerID: string, entries: ModelEntry[]) {
   const models: ReturnType<typeof Model.Info.default>[] = []
   for (const entry of picked) {
     const id = toConfigID(entry.id)
+    const claude = isClaudeEntry(entry)
     const input = entry.modalities?.input?.filter((m) => typeof m === "string" && m.length > 0)
     const output = entry.modalities?.output?.filter((m) => typeof m === "string" && m.length > 0)
 
@@ -143,7 +144,17 @@ function toOpenCodeModels(providerID: string, entries: ModelEntry[]) {
       ...Model.Info.default(providerID, id),
       name: entry.name && entry.name.length > 0 ? entry.name : entry.id,
       modelID: entry.id,
-      package: packageFor(entry),
+      package: claude ? ANTHROPIC_COMPATIBLE : OPENAI_COMPATIBLE,
+      ...(claude
+        ? {
+            // Replaying a thinking block under a changed system prompt is rejected unless the
+            // block is dropped when the prefix mismatches. The setting needs its beta header.
+            headers: { "anthropic-beta": "thinking-binding-controls-2026-08-01" },
+            settings: {
+              thinking: { type: "adaptive", block_binding: { prefix_mismatch_behavior: "drop_block" } },
+            },
+          }
+        : {}),
       capabilities: {
         tools: entry.tool_call !== false,
         input: input && input.length > 0 ? input : ["text"],
