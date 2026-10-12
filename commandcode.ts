@@ -2,10 +2,14 @@
  * Command Code provider plugin for OpenCode V2.
  *
  * Ported from @herouucn/opencode-commandcode (V1 plugin API) to the V2 plugin API.
- * At startup it fetches the model catalog (models.json) and registers:
+ * At startup it fetches Command Code's official model list and registers:
  *  - the `commandcode` provider (OpenAI-compatible runtime, baseURL api.commandcode.ai)
  *  - the model list with limits, costs, capabilities and reasoning-effort variants
  *  - the `commandcode` integration with API-key and env-var credential methods
+ *
+ * The official list (api.commandcode.ai/provider/v1/models) decides which models exist and
+ * which endpoint serves them; the third-party catalog only enriches them with prices and
+ * variants, so models the Provider API no longer serves never get registered.
  *
  * Credentials (pick one):
  *  - `COMMANDCODE_API_KEY` on the OpenCode server, e.g.:
@@ -14,9 +18,9 @@
  *      opencode auth login commandcode --method key
  *
  * Optional overrides:
- *  - COMMANDCODE_CATALOG_URL: alternate catalog URL, or `disabled` to skip fetching.
+ *  - COMMANDCODE_CATALOG_URL: alternate enrichment-catalog URL, or `disabled` for offline use.
  *
- * On fetch failure the last successfully fetched catalog is reused from plugin storage.
+ * On fetch failure the last successfully fetched list is reused from plugin storage.
  *
  * Command Code's Provider API accepts only text and image content, so this plugin rewrites
  * what it rejects: document attachments (including documents inside tool results) become
@@ -31,6 +35,7 @@ import { join } from "node:path"
 const PROVIDER_ID = "commandcode"
 const INTEGRATION_ID = "commandcode"
 const DEFAULT_BASE_URL = "https://api.commandcode.ai/provider/v1/"
+const OFFICIAL_MODELS_URL = "https://api.commandcode.ai/provider/v1/models"
 const DEFAULT_CATALOG_URL =
   "https://raw.githubusercontent.com/herouu/opencode-commandcode/main/models.json"
 const CACHE_KEY = "catalog"
@@ -53,6 +58,8 @@ interface ModelEntry {
   limit?: { context?: number; output?: number }
   attachment?: boolean
   modalities?: { input?: string[]; output?: string[] }
+  /** Endpoints the official list reports for this model (e.g. "/messages"). */
+  endpoints?: string[]
 }
 
 function catalogUrl(): string {
@@ -79,13 +86,89 @@ async function fetchCatalog(url: string): Promise<ModelEntry[] | null> {
   }
 }
 
+interface OfficialModel {
+  id?: unknown
+  name?: unknown
+  context_length?: unknown
+  supported_endpoints?: unknown
+}
+
+/** Command Code's own model list: the authority on which models the Provider API serves. */
+async function fetchOfficialModels(): Promise<OfficialModel[] | null> {
+  try {
+    const controller = new AbortController()
+    const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS)
+    try {
+      const res = await fetch(OFFICIAL_MODELS_URL, {
+        signal: controller.signal,
+        headers: { Accept: "application/json" },
+      })
+      if (!res.ok) return null
+      const body = (await res.json()) as { data?: unknown }
+      if (!Array.isArray(body?.data)) return null
+      const list = (body.data as OfficialModel[]).filter(
+        (model) => typeof model?.id === "string" && (model.id as string).length > 0,
+      )
+      return list.length > 0 ? list : null
+    } finally {
+      clearTimeout(timer)
+    }
+  } catch {
+    return null
+  }
+}
+
+/**
+ * The official list decides what exists; the mirror only adds prices, variants and
+ * modalities. Stale mirror entries the API no longer serves are dropped.
+ */
+function mergeCatalog(official: OfficialModel[] | null, mirror: ModelEntry[] | null): ModelEntry[] | null {
+  if (!official) return mirror
+  const mirrorById = new Map<string, ModelEntry>()
+  for (const entry of mirror ?? []) {
+    if (entry && typeof entry.id === "string") mirrorById.set(entry.id, entry)
+  }
+
+  const merged: ModelEntry[] = []
+  for (const model of official) {
+    const id = String(model.id)
+    const endpoints = Array.isArray(model.supported_endpoints)
+      ? (model.supported_endpoints as unknown[]).filter((value): value is string => typeof value === "string")
+      : []
+    const context = typeof model.context_length === "number" ? model.context_length : undefined
+    const name = typeof model.name === "string" && model.name.length > 0 ? model.name : undefined
+    const base = mirrorById.get(id)
+    if (base) {
+      merged.push({
+        ...base,
+        name: name ?? base.name,
+        limit: context ? { ...base.limit, context } : base.limit,
+        endpoints,
+      })
+    } else {
+      merged.push({
+        id,
+        name: name ?? id,
+        tool_call: true,
+        cost: { input: 0, output: 0 },
+        limit: { context: context ?? 200_000, output: 65_536 },
+        modalities: { input: ["text"], output: ["text"] },
+        endpoints,
+      })
+    }
+  }
+  return merged
+}
+
 /** Claude models are served by Command Code through the Anthropic Messages route. */
 function isClaudeModel(id: unknown): boolean {
   const value = String(id ?? "").toLowerCase()
   return value.startsWith("claude") || value.startsWith("anthropic/")
 }
 
-function isClaudeEntry(entry: ModelEntry): boolean {
+/** Prefer the route the official list reports; fall back to the model name. */
+function usesAnthropicRoute(entry: ModelEntry): boolean {
+  if (entry.endpoints && entry.endpoints.length > 0) return entry.endpoints.includes("/messages")
   return isClaudeModel(entry.id)
 }
 
@@ -140,7 +223,7 @@ function toOpenCodeModels(providerID: string, entries: ModelEntry[]) {
   const models: ReturnType<typeof Model.Info.default>[] = []
   for (const entry of picked) {
     const id = toConfigID(entry.id)
-    const claude = isClaudeEntry(entry)
+    const claude = usesAnthropicRoute(entry)
     const input = entry.modalities?.input?.filter((m) => typeof m === "string" && m.length > 0)
     const output = entry.modalities?.output?.filter((m) => typeof m === "string" && m.length > 0)
 
@@ -240,13 +323,21 @@ function convertDocumentPart(part: ContentPart, workspace: string): ContentPart 
 export default Plugin.define({
   id: "commandcode",
   async setup(ctx) {
-    const url = catalogUrl()
+    const mirrorUrl = catalogUrl()
+    const offline = mirrorUrl === "disabled"
 
-    let entries = await fetchCatalog(url)
-    let source = "remote"
+    let official: OfficialModel[] | null = null
+    let mirror: ModelEntry[] | null = null
+    if (!offline) {
+      ;[official, mirror] = await Promise.all([fetchOfficialModels(), fetchCatalog(mirrorUrl)])
+    }
+
+    let entries = mergeCatalog(official, mirror)
+    let source = official ? (mirror ? "official+catalog" : "official") : mirror ? "catalog" : ""
+
     if (entries && entries.length > 0) {
       try {
-        await ctx.storage.set(CACHE_KEY, { fetchedAt: new Date().toISOString(), url, models: entries })
+        await ctx.storage.set(CACHE_KEY, { fetchedAt: new Date().toISOString(), source, models: entries })
       } catch {
         // caching is best-effort only
       }
@@ -260,7 +351,7 @@ export default Plugin.define({
     }
 
     if (!entries || entries.length === 0) {
-      console.warn("[commandcode] no model catalog available (remote fetch failed and no cache)")
+      console.warn("[commandcode] no model list available (official/mirror fetch failed and no cache)")
       return
     }
 
