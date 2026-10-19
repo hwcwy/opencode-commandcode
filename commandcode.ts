@@ -70,10 +70,9 @@ const PLAN_FIELD = "plan"
 // --- generated:efforts (scripts/sync-efforts.mjs; do not edit below) ---
 // Source: command-code@1.84.0 model catalog d6177babb08d.
 // The official CLI has no runtime API for reasoning levels: it ships this
-// catalog (id + aliases -> reasoningEfforts) and defaults to DEFAULT_EFFORTS
-// for every other model it declares reasoning-capable.
+// catalog (id + aliases -> reasoningEfforts). Models absent from it get no
+// variants, exactly like the official client.
 const EFFORTS_SOURCE = "command-code@1.84.0"
-const DEFAULT_EFFORTS: readonly string[] = ["low", "medium", "high"]
 const EFFORTS_BY_MODEL: Record<string, readonly string[]> = {
   "claude-fable-5": ["low", "medium", "high", "xhigh", "max"],
   "claude-fable-5-1": ["low", "medium", "high", "xhigh", "max"],
@@ -340,16 +339,17 @@ function setEffortTable(table: Record<string, readonly string[]>) {
 }
 
 /**
- * Official catalog entry wins. Otherwise OpenCode's convention applies: only
- * reasoning-capable models get levels, falling back to the official CLI default
- * (`low/medium/high`); non-reasoning models get none.
+ * Mirror the official CLI exactly: only catalog entries carry levels
+ * (`getSupportedEfforts` there is `catalog.get(model) ?? null`). Every other
+ * model gets no variants, matching OpenCode's handling of non-reasoning models.
  */
-export function effortsFor(modelID: string, reasoning: boolean): readonly string[] {
+export function effortsFor(modelID: string): readonly string[] {
   const shortID = modelID.split("/").pop() ?? modelID
-  const official =
-    effortIndex.exact.get(normalizeEffortID(modelID)) ?? effortIndex.short.get(normalizeEffortID(shortID))
-  if (official) return official
-  return reasoning ? DEFAULT_EFFORTS : []
+  return (
+    effortIndex.exact.get(normalizeEffortID(modelID)) ??
+    effortIndex.short.get(normalizeEffortID(shortID)) ??
+    []
+  )
 }
 
 interface OfficialModel {
@@ -667,7 +667,7 @@ export function toOpenCodeModels(providerID: string, entries: CatalogModel[]) {
         cache: { read: entry.longContext.rates.cacheRead, write: entry.longContext.rates.cacheWrite },
       })
     }
-    const levels = effortsFor(entry.id, entry.reasoning)
+    const levels = effortsFor(entry.id)
     models.push({
       ...base,
       name: entry.name && entry.name.length > 0 ? entry.name : entry.id,

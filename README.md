@@ -171,7 +171,7 @@ opencode service set env COMMANDCODE_PLAN goat
 
 ## 已知限制
 
-- **思考等级**：只有 reasoning 模型才生成 `variants`（OpenCode 非思考模型无档位）；官方目录未收录但为 reasoning 的模型统一给 `low/medium/high`，若某上游实际忽略该参数，选择档位不会报错但可能无效果。
+- **思考等级**：只有官方 CLI 目录收录的模型才有 `variants`（与官方客户端一致，当前 64/93）；其余模型（含文档标 reasoning 但官方未给档位的）无档位，官方目录更新后会自动出现。
 - Command Code 不接受 PDF / 文档块：附件会被改写为**文件引用**（见「实现要点」），
   模型需用自己的工具去读（如本机用 `python` + `pymupdf` 解析 PDF）。
 - Claude 系对攻防/漏洞利用类内容会触发 Anthropic 的 **cyber safeguard** 拦截
