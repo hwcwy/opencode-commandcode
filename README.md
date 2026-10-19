@@ -16,6 +16,7 @@ and an effect or setup function.`）。本插件用 V2 插件 API 重新实现�
 | 零配置注入 | 启动时注册 `commandcode` provider，使用 OpenAI 兼容运行时 |
 | 模型目录（官方 API） | 拉取 `api.commandcode.ai/provider/v1/models`，决定**有哪些模型**、上下文长度与可用端点（Claude 走 Messages，其余走 chat/completions） |
 | 能力/价格（官方文档） | 解析官方文档页内嵌的整份目录 JSON：`vision` / `reasoning`、上下文、官方价格（含长上下文分档）、发布时间、**最低套餐** |
+| 思考等级 | 官方 CLI 目录的 `reasoningEfforts` → OpenCode `variants`：Claude 走 `effort`（`output_config.effort`），其余走 `reasoningEffort`（`reasoning_effort`）；启动时自动拉最新（24h 缓存） |
 | 订阅过滤 | 连接 API Key 时表单里有「Subscription plan」选择器（或 `COMMANDCODE_PLAN`），按官方 `minPlanName` 隐藏高于你套餐的模型 |
 | 离线兜底 | 拉取失败复用上次成功缓存（插件 storage，1 小时 TTL） |
 | 凭据集成 | 注册 `commandcode` 集成，支持 API Key（`/connect`）与环境变量两种方式 |
@@ -163,15 +164,14 @@ opencode service set env COMMANDCODE_PLAN goat
 ## 与原插件的差异
 
 - **目录只来自官方**：不使用原插件的第三方 `models.json` 镜像。
-- **无内置推理档位**：官方没有每模型档位数据，因此不再注册 `variants`；需要时可在自己的
-  `opencode.json(c)` 里给模型手写 `variants`（参见 OpenCode 文档的 Models → Variants）。
+- **思考等级来自官方 CLI 目录**（而非第三方镜像）：运行时从官方 `command-code` 包读取 `reasoningEfforts`。
 - 不做本地 `command-code` CLI 包提取（原 `COMMANDCODE_PACKAGE_PATH` / 本地包发现）。
 - 不读取 `~/.config/opencode/opencode-commandcode.json`，仅支持环境变量覆盖。
 - 目录缓存改用 OpenCode 插件 storage，而非 `~/.local/state/opencode/...` 文件。
 
 ## 已知限制
 
-- **推理档位**：官方未提供每模型档位，本插件不生成 `variants`（可自行在配置里添加）。
+- **思考等级**：只有 reasoning 模型才生成 `variants`（OpenCode 非思考模型无档位）；官方目录未收录但为 reasoning 的模型统一给 `low/medium/high`，若某上游实际忽略该参数，选择档位不会报错但可能无效果。
 - Command Code 不接受 PDF / 文档块：附件会被改写为**文件引用**（见「实现要点」），
   模型需用自己的工具去读（如本机用 `python` + `pymupdf` 解析 PDF）。
 - Claude 系对攻防/漏洞利用类内容会触发 Anthropic 的 **cyber safeguard** 拦截

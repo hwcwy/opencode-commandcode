@@ -36,6 +36,7 @@ import { Plugin, Provider, Model } from "@opencode/plugin"
 import { createHash } from "node:crypto"
 import { existsSync, mkdirSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
+import { gunzipSync } from "node:zlib"
 
 const PROVIDER_ID = "commandcode"
 const INTEGRATION_ID = "commandcode"
@@ -65,6 +66,291 @@ const ANTHROPIC_COMPATIBLE = "@opencode/ai/providers/anthropic-compatible"
 const PLAN_RANKS: Record<string, number> = { go: 1, goat: 2, pro: 3, max: 4 }
 /** Key of the API-key form answer that carries the subscription plan. */
 const PLAN_FIELD = "plan"
+
+// --- generated:efforts (scripts/sync-efforts.mjs; do not edit below) ---
+// Source: command-code@1.84.0 model catalog d6177babb08d.
+// The official CLI has no runtime API for reasoning levels: it ships this
+// catalog (id + aliases -> reasoningEfforts) and defaults to DEFAULT_EFFORTS
+// for every other model it declares reasoning-capable.
+const EFFORTS_SOURCE = "command-code@1.84.0"
+const DEFAULT_EFFORTS: readonly string[] = ["low", "medium", "high"]
+const EFFORTS_BY_MODEL: Record<string, readonly string[]> = {
+  "claude-fable-5": ["low", "medium", "high", "xhigh", "max"],
+  "claude-fable-5-1": ["low", "medium", "high", "xhigh", "max"],
+  "claude-haiku-5-5": ["low", "medium", "high", "xhigh", "max"],
+  "claude-opus-4-5-20251101": ["low", "medium", "high", "xhigh", "max"],
+  "claude-opus-4-6": ["low", "medium", "high", "xhigh", "max"],
+  "claude-opus-4-7": ["low", "medium", "high", "xhigh", "max"],
+  "claude-opus-4-8": ["low", "medium", "high", "xhigh", "max"],
+  "claude-opus-5": ["low", "medium", "high", "xhigh", "max"],
+  "claude-opus-5-5": ["low", "medium", "high", "xhigh", "max"],
+  "claude-sonnet-4-20250514": ["low", "medium", "high", "xhigh", "max"],
+  "claude-sonnet-4-5-20250929": ["low", "medium", "high", "xhigh", "max"],
+  "claude-sonnet-4-6": ["low", "medium", "high", "xhigh", "max"],
+  "claude-sonnet-5": ["low", "medium", "high", "xhigh", "max"],
+  "claude-sonnet-5-5": ["low", "medium", "high", "xhigh", "max"],
+  "deepseek/deepseek-v4-flash": ["off", "high", "max"],
+  "deepseek/deepseek-v4-flash-fast": ["low", "high", "max"],
+  "deepseek/deepseek-v4-flash-vision-exp": ["off", "high", "max"],
+  "deepseek/deepseek-v4-pro": ["off", "high", "max"],
+  "deepseek/deepseek-v4.1-flash": ["off", "low", "high", "max"],
+  "deepseek/deepseek-v4.1-flash-fast": ["off", "low", "high", "max"],
+  "google/gemini-3.1-flash-lite": ["low", "medium", "high"],
+  "google/gemini-3.5-flash": ["low", "medium", "high"],
+  "google/gemini-3.5-flash-lite": ["low", "medium", "high"],
+  "google/gemini-3.6-flash": ["low", "medium", "high"],
+  "google/gemini-3.7-flash": ["low", "medium", "high"],
+  "google/gemini-3.8-flash": ["low", "medium", "high"],
+  "google/gemini-4-argon": ["low", "medium", "high"],
+  "gpt-5.3-codex": ["low", "medium", "high", "xhigh"],
+  "gpt-5.4": ["low", "medium", "high", "xhigh"],
+  "gpt-5.4-mini": ["low", "medium", "high"],
+  "gpt-5.5": ["low", "medium", "high", "xhigh"],
+  "gpt-5.6-luna": ["low", "medium", "high", "xhigh", "max"],
+  "gpt-5.6-sol": ["low", "medium", "high", "xhigh", "max"],
+  "gpt-5.6-terra": ["low", "medium", "high", "xhigh", "max"],
+  "gpt-6-astra": ["low", "medium", "high", "xhigh", "max"],
+  "gpt-6-luna": ["low", "medium", "high", "xhigh", "max"],
+  "gpt-6-sol": ["low", "medium", "high", "xhigh", "max"],
+  "gpt-6.1-sol": ["low", "medium", "high", "xhigh", "max"],
+  "inclusionai/ling-3.1-flash": ["low", "medium", "high"],
+  "meta/muse-spark-1.1": ["low", "medium", "high", "xhigh"],
+  "meta/muse-spark-1.2": ["low", "medium", "high", "xhigh"],
+  "meta/muse-spark-1.2-contributor": ["low", "medium", "high", "xhigh"],
+  "meta/muse-spark-1.3": ["low", "medium", "high", "xhigh", "max"],
+  "meta/muse-spark-1.3-contributor": ["low", "medium", "high", "xhigh"],
+  "meta/muse-spark-open": ["low", "medium", "high"],
+  "meta/muse-wonder-1.0": ["low", "medium", "high", "xhigh"],
+  "minimax/minimax-m3-free": ["low", "medium", "high"],
+  "MiniMaxAI/MiniMax-M3": ["low", "medium", "high"],
+  "MiniMaxAI/MiniMax-M3-Free": ["low", "medium", "high"],
+  "mistral/mistral-large-4": ["low", "medium", "high"],
+  "moonshotai/Kimi-K3": ["low", "high", "max"],
+  "nvidia/nemotron-3.5-super-vl": ["low", "medium", "high"],
+  "Qwen/Qwen3.8-27B": ["low", "medium", "xhigh"],
+  "Qwen/Qwen3.8-Flash": ["low", "medium", "xhigh"],
+  "Qwen/Qwen3.8-Max": ["low", "medium", "xhigh"],
+  "Qwen/Qwen3.8-Max-0902": ["low", "medium", "xhigh"],
+  "Qwen/Qwen3.8-Max-Prime": ["low", "medium", "xhigh"],
+  "Qwen/Qwen3.8-Omni-Flash": ["low", "medium", "xhigh"],
+  "sakana/fugu-ultra": ["high", "xhigh"],
+  "stealth/cat-jam:free": ["low", "medium", "high", "xhigh", "max"],
+  "stealth/glyph-cluster:free": ["low", "medium", "high", "xhigh"],
+  "stepfun/Step-5-Preview": ["low", "medium", "high"],
+  "tencent/hy4-preview": ["low", "medium", "high"],
+  "xai/grok-4.5": ["low", "medium", "high"],
+  "xai/grok-4.6": ["low", "medium", "high", "xhigh"],
+  "xai/grok-4.7": ["low", "medium", "high", "xhigh"],
+  "z-ai/glm-5.3-flash": ["low", "high", "max"],
+  "z-ai/glm-5.3-flashx": ["low", "high", "max"],
+  "zai-org/GLM-5.2": ["high", "max"],
+  "zai-org/GLM-5.3": ["low", "high", "max"],
+}
+// --- /generated:efforts ---
+
+/**
+ * The generated block above is only an offline fallback. At runtime the plugin
+ * reads the newest official model catalog from the published CLI package
+ * (`command-code`, catalog version included) and caches it for a day.
+ */
+const CLI_PACKAGE = "command-code"
+const CLI_REGISTRY_URL = `https://registry.npmjs.org/${CLI_PACKAGE}`
+const EFFORT_CACHE_KEY = "efforts"
+const EFFORT_TTL_MS = 24 * 60 * 60 * 1000
+const EFFORT_FETCH_TIMEOUT_MS = 30_000
+const VALID_EFFORT_LEVELS = new Set(["off", "low", "medium", "high", "xhigh", "max"])
+
+interface EffortCatalog {
+  version?: string
+  catalogVersion?: string
+  fetchedAt?: string
+  efforts: Record<string, readonly string[]>
+}
+
+/** Minimal tar reader: the CLI tarball only contains regular files. */
+function parseTar(buffer: Buffer): Map<string, Buffer> {
+  const files = new Map<string, Buffer>()
+  let offset = 0
+  while (offset + 512 <= buffer.length) {
+    const header = buffer.subarray(offset, offset + 512)
+    const name = header.toString("utf8", 0, 100).replace(/\0.*$/, "")
+    if (name.length === 0) {
+      offset += 512
+      continue
+    }
+    const size = Number.parseInt(header.toString("utf8", 124, 136).replace(/\0.*$/, "").trim() || "0", 8)
+    offset += 512
+    files.set(name, buffer.subarray(offset, offset + size))
+    offset += Math.ceil(size / 512) * 512
+  }
+  return files
+}
+
+/** Return the balanced `[...]` slice starting at the first `[` at or after `from`. */
+function sliceBrackets(source: string, from: number): string {
+  const start = source.indexOf("[", from)
+  if (start < 0) throw new Error("array start not found")
+  let depth = 0
+  let inString = false
+  let escaped = false
+  for (let index = start; index < source.length; index++) {
+    const char = source[index]
+    if (inString) {
+      if (escaped) escaped = false
+      else if (char === "\\") escaped = true
+      else if (char === '"') inString = false
+      continue
+    }
+    if (char === '"') inString = true
+    else if (char === "[") depth++
+    else if (char === "]") {
+      depth--
+      if (depth === 0) return source.slice(start, index + 1)
+    }
+  }
+  throw new Error("unbalanced array")
+}
+
+function splitObjects(arrayLiteral: string): string[] {
+  const objects: string[] = []
+  let depth = 0
+  let start = -1
+  let inString = false
+  let escaped = false
+  for (let index = 0; index < arrayLiteral.length; index++) {
+    const char = arrayLiteral[index]
+    if (inString) {
+      if (escaped) escaped = false
+      else if (char === "\\") escaped = true
+      else if (char === '"') inString = false
+      continue
+    }
+    if (char === '"') inString = true
+    else if (char === "{") {
+      if (depth === 0) start = index
+      depth++
+    } else if (char === "}") {
+      depth--
+      if (depth === 0 && start >= 0) {
+        objects.push(arrayLiteral.slice(start, index + 1))
+        start = -1
+      }
+    }
+  }
+  return objects
+}
+
+function quotedValues(source: string): string[] {
+  return [...source.matchAll(/"([^"]+)"/g)].map((match) => match[1])
+}
+
+/** The CLI ships `catalogVersion:"<sha>"` + `data:[{ id, aliases, reasoningEfforts }]`. */
+function extractEffortCatalog(source: string): { catalogVersion: string; efforts: Record<string, string[]> } | null {
+  const versionMatch = /catalogVersion:"([0-9a-f]{16,})"/.exec(source)
+  if (!versionMatch) return null
+  const dataStart = source.indexOf("data:", versionMatch.index)
+  if (dataStart < 0) return null
+
+  const efforts: Record<string, string[]> = {}
+  for (const entry of splitObjects(sliceBrackets(source, dataStart))) {
+    const id = /\bid:"([^"]+)"/.exec(entry)
+    const levels = /reasoningEfforts:(\[[^\]]*\])/.exec(entry)
+    if (!id || !levels) continue
+    const list = quotedValues(levels[1]).filter((level) => VALID_EFFORT_LEVELS.has(level))
+    if (list.length === 0) continue
+    efforts[id[1]] = list
+    const aliases = /aliases:(\[[^\]]*\])/.exec(entry)
+    for (const alias of aliases ? quotedValues(aliases[1]) : []) efforts[alias] = list
+  }
+  return Object.keys(efforts).length > 0 ? { catalogVersion: versionMatch[1], efforts } : null
+}
+
+/** Pull the newest catalog from the official npm package (registry -> tarball -> cli.mjs). */
+export async function fetchLatestEfforts(): Promise<EffortCatalog | null> {
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), EFFORT_FETCH_TIMEOUT_MS)
+  try {
+    const metaRes = await fetch(CLI_REGISTRY_URL, {
+      signal: controller.signal,
+      headers: { accept: "application/json" },
+    })
+    if (!metaRes.ok) return null
+    const meta = (await metaRes.json()) as any
+    const version = meta?.["dist-tags"]?.latest
+    const tarball = typeof version === "string" ? meta?.versions?.[version]?.dist?.tarball : undefined
+    if (typeof version !== "string" || typeof tarball !== "string") return null
+
+    const res = await fetch(tarball, { signal: controller.signal })
+    if (!res.ok) return null
+    const files = parseTar(gunzipSync(Buffer.from(await res.arrayBuffer())))
+    const entry = [...files.keys()].find((name) => name.endsWith("dist/cli.mjs"))
+    if (!entry) return null
+    const catalog = extractEffortCatalog(files.get(entry)!.toString("utf8"))
+    if (!catalog) return null
+    return {
+      version,
+      catalogVersion: catalog.catalogVersion,
+      fetchedAt: new Date().toISOString(),
+      efforts: catalog.efforts,
+    }
+  } catch {
+    return null
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
+function readEffortCache(value: unknown): EffortCatalog | null {
+  if (!value || typeof value !== "object") return null
+  const record = value as EffortCatalog
+  if (!record.efforts || typeof record.efforts !== "object") return null
+  const efforts: Record<string, readonly string[]> = {}
+  for (const [id, levels] of Object.entries(record.efforts)) {
+    if (Array.isArray(levels) && levels.every((level) => typeof level === "string")) {
+      efforts[id] = levels as string[]
+    }
+  }
+  return Object.keys(efforts).length > 0 ? { ...record, efforts } : null
+}
+
+/** Normalize a model id for effort lookup: case, separators, Anthropic date suffix. */
+function normalizeEffortID(value: string): string {
+  return value
+    .toLowerCase()
+    .trim()
+    .replace(/[._]/g, "-")
+    .replace(/-\d{8}$/, "")
+}
+
+function buildEffortIndex(table: Record<string, readonly string[]>) {
+  const exact = new Map<string, readonly string[]>()
+  const short = new Map<string, readonly string[]>()
+  for (const [id, levels] of Object.entries(table)) {
+    exact.set(normalizeEffortID(id), levels)
+    const shortID = normalizeEffortID(id.split("/").pop() ?? id)
+    if (!short.has(shortID)) short.set(shortID, levels)
+  }
+  return { exact, short }
+}
+
+let effortIndex = buildEffortIndex(EFFORTS_BY_MODEL)
+
+function setEffortTable(table: Record<string, readonly string[]>) {
+  effortIndex = buildEffortIndex(table)
+}
+
+/**
+ * Official catalog entry wins. Otherwise OpenCode's convention applies: only
+ * reasoning-capable models get levels, falling back to the official CLI default
+ * (`low/medium/high`); non-reasoning models get none.
+ */
+export function effortsFor(modelID: string, reasoning: boolean): readonly string[] {
+  const shortID = modelID.split("/").pop() ?? modelID
+  const official =
+    effortIndex.exact.get(normalizeEffortID(modelID)) ?? effortIndex.short.get(normalizeEffortID(shortID))
+  if (official) return official
+  return reasoning ? DEFAULT_EFFORTS : []
+}
 
 interface OfficialModel {
   id?: unknown
@@ -363,6 +649,7 @@ export function toOpenCodeModels(providerID: string, entries: CatalogModel[]) {
   for (const entry of picked) {
     const id = toConfigID(entry.id)
     const base = Model.Info.default(providerID, id)
+    const anthropic = usesAnthropicRoute(entry)
     const input = ["text"]
     if (entry.vision) input.push("image")
     const cost: typeof base.cost = [
@@ -380,14 +667,19 @@ export function toOpenCodeModels(providerID: string, entries: CatalogModel[]) {
         cache: { read: entry.longContext.rates.cacheRead, write: entry.longContext.rates.cacheWrite },
       })
     }
+    const levels = effortsFor(entry.id, entry.reasoning)
     models.push({
       ...base,
       name: entry.name && entry.name.length > 0 ? entry.name : entry.id,
       modelID: entry.id,
-      package: usesAnthropicRoute(entry) ? ANTHROPIC_COMPATIBLE : OPENAI_COMPATIBLE,
+      package: anthropic ? ANTHROPIC_COMPATIBLE : OPENAI_COMPATIBLE,
       capabilities: { tools: true, input, output: ["text"] },
       limit: { context: entry.context ?? 200_000, output: 65_536 },
       cost,
+      variants: levels.map((level) => ({
+        id: level,
+        settings: anthropic ? { effort: level } : { reasoningEffort: level },
+      })) as typeof base.variants,
       ...(entry.released ? { time: { released: entry.released } } : {}),
     })
   }
@@ -548,6 +840,16 @@ export default Plugin.define({
         plan ? catalog.filter((model) => planAllows(model.minPlan, plan)) : catalog,
       )
 
+    const cachedEfforts = readEffortCache(
+      await ctx.storage.get(EFFORT_CACHE_KEY).catch(() => undefined),
+    )
+    if (cachedEfforts) {
+      setEffortTable({ ...EFFORTS_BY_MODEL, ...cachedEfforts.efforts })
+      console.log(
+        `[commandcode] efforts: cached ${cachedEfforts.version ?? "unknown"} (${Object.keys(cachedEfforts.efforts).length} keys)`,
+      )
+    }
+
     let currentPlan = await resolvePlan(ctx)
     let currentModels = render(currentPlan)
 
@@ -599,6 +901,33 @@ export default Plugin.define({
         integration.name = "Command Code"
       })
     })
+
+    // Refresh the official effort catalog in the background (cached for a day).
+    // The generated snapshot only covers offline/first run; a newer catalog
+    // re-renders the model list without restarting the server.
+    const effortsFresh = cachedEfforts?.fetchedAt
+      ? Date.now() - Date.parse(cachedEfforts.fetchedAt) < EFFORT_TTL_MS
+      : false
+    if (!effortsFresh) {
+      void (async () => {
+        const next = await fetchLatestEfforts()
+        if (!next) {
+          console.log("[commandcode] efforts: refresh failed; keeping cached/snapshot table")
+          return
+        }
+        setEffortTable({ ...EFFORTS_BY_MODEL, ...next.efforts })
+        try {
+          await ctx.storage.set(EFFORT_CACHE_KEY, next)
+        } catch {
+          // caching is best-effort
+        }
+        currentModels = render(currentPlan)
+        await ctx.provider.reload()
+        console.log(
+          `[commandcode] efforts: refreshed ${next.version} (${Object.keys(next.efforts).length} keys): ${currentModels.filter((model) => model.variants.length > 0).length} models with variants`,
+        )
+      })()
+    }
 
     // Follow credential changes so a reconnect (or a newly picked plan) updates the picker
     // without restarting the server: transforms replay on reload and read the current list.
@@ -683,7 +1012,7 @@ export default Plugin.define({
     console.log(
       `[commandcode] ready: ${currentModels.length} models (plan: ${currentPlan ?? "all"}${
         hidden > 0 ? `, hidden: ${hidden}` : ""
-      }, docs: ${docs ? docs.length : 0}, cache: ${fresh ? "hit" : "miss"})`,
+      }, variants: ${currentModels.filter((model) => model.variants.length > 0).length}, docs: ${docs ? docs.length : 0}, cache: ${fresh ? "hit" : "miss"})`,
     )
 
     return () => controller.abort()
