@@ -68,11 +68,11 @@ const PLAN_RANKS: Record<string, number> = { go: 1, goat: 2, pro: 3, max: 4 }
 const PLAN_FIELD = "plan"
 
 // --- generated:efforts (scripts/sync-efforts.mjs; do not edit below) ---
-// Source: command-code@1.84.0 model catalog d6177babb08d.
+// Source: command-code@1.88.4 model catalog b21583dbdf3e.
 // The official CLI has no runtime API for reasoning levels: it ships this
 // catalog (id + aliases -> reasoningEfforts). Models absent from it get no
 // variants, exactly like the official client.
-const EFFORTS_SOURCE = "command-code@1.84.0"
+const EFFORTS_SOURCE = "command-code@1.88.4"
 const EFFORTS_BY_MODEL: Record<string, readonly string[]> = {
   "claude-fable-5": ["low", "medium", "high", "xhigh", "max"],
   "claude-fable-5-1": ["low", "medium", "high", "xhigh", "max"],
@@ -112,7 +112,10 @@ const EFFORTS_BY_MODEL: Record<string, readonly string[]> = {
   "gpt-6-luna": ["low", "medium", "high", "xhigh", "max"],
   "gpt-6-sol": ["low", "medium", "high", "xhigh", "max"],
   "gpt-6.1-sol": ["low", "medium", "high", "xhigh", "max"],
+  "gpt-6.1-terra": ["low", "medium", "high", "xhigh", "max"],
   "inclusionai/ling-3.1-flash": ["low", "medium", "high"],
+  "inclusionai/ling-3.1-flash-1019": ["low", "medium", "high"],
+  "inclusionai/ling-3.1-flash-1019:free": ["low", "medium", "high"],
   "meta/muse-spark-1.1": ["low", "medium", "high", "xhigh"],
   "meta/muse-spark-1.2": ["low", "medium", "high", "xhigh"],
   "meta/muse-spark-1.2-contributor": ["low", "medium", "high", "xhigh"],
@@ -121,10 +124,15 @@ const EFFORTS_BY_MODEL: Record<string, readonly string[]> = {
   "meta/muse-spark-open": ["low", "medium", "high"],
   "meta/muse-wonder-1.0": ["low", "medium", "high", "xhigh"],
   "minimax/minimax-m3-free": ["low", "medium", "high"],
+  "minimax/minimax-m3.1-flash": ["low", "medium", "high", "xhigh", "max"],
+  "minimax/minimax-m3.1-flash-preview": ["low", "medium", "high", "xhigh", "max"],
+  "minimax/minimax-m3.1-flash-preview:free": ["low", "medium", "high", "xhigh", "max"],
+  "minimax/minimax-m3.1-flash:free": ["low", "medium", "high", "xhigh", "max"],
   "MiniMaxAI/MiniMax-M3": ["low", "medium", "high"],
   "MiniMaxAI/MiniMax-M3-Free": ["low", "medium", "high"],
   "mistral/mistral-large-4": ["low", "medium", "high"],
   "moonshotai/Kimi-K3": ["low", "high", "max"],
+  "moonshotai/Kimi-K3.1-Pro": ["low", "high", "max"],
   "nvidia/nemotron-3.5-super-vl": ["low", "medium", "high"],
   "Qwen/Qwen3.8-27B": ["low", "medium", "xhigh"],
   "Qwen/Qwen3.8-Flash": ["low", "medium", "xhigh"],
@@ -132,8 +140,9 @@ const EFFORTS_BY_MODEL: Record<string, readonly string[]> = {
   "Qwen/Qwen3.8-Max-0902": ["low", "medium", "xhigh"],
   "Qwen/Qwen3.8-Max-Prime": ["low", "medium", "xhigh"],
   "Qwen/Qwen3.8-Omni-Flash": ["low", "medium", "xhigh"],
+  "reflection/beam:free": ["low", "medium", "high", "xhigh", "max"],
   "sakana/fugu-ultra": ["high", "xhigh"],
-  "stealth/cat-jam:free": ["low", "medium", "high", "xhigh", "max"],
+  "stealth/crouton-alpha": ["low", "medium", "high", "xhigh", "max"],
   "stealth/glyph-cluster:free": ["low", "medium", "high", "xhigh"],
   "stepfun/Step-5-Preview": ["low", "medium", "high"],
   "tencent/hy4-preview": ["low", "medium", "high"],
@@ -680,6 +689,11 @@ export function toOpenCodeModels(providerID: string, entries: CatalogModel[]) {
         id: level,
         settings: anthropic ? { effort: level } : { reasoningEffort: level },
       })) as typeof base.variants,
+      // Command Code's chat route sometimes ends a stream without a finish_reason. The host
+      // treats that as an incomplete stream and retries, repeating work that already
+      // finished, so accept such streams as complete. Claude uses the Messages route, which
+      // carries its own stop_reason and keeps the host default.
+      ...(anthropic ? {} : { compatibility: { requireFinishReason: false } }),
       ...(entry.released ? { time: { released: entry.released } } : {}),
     })
   }
@@ -1008,6 +1022,27 @@ export default Plugin.define({
       }
     })
 
+    // The read tool stores whole documents as file parts inside the tool result. Replaying
+    // such a part later crashes OpenCode while converting history (`e.uri.includes`), and
+    // the crash repeats every turn. Rewrite document results before they are persisted,
+    // for Command Code sessions only; images stay native.
+    await ctx.tool.hook("execute.after", async (event) => {
+      if (event.tool !== "read" || event.status !== "completed") return
+      const session = await ctx.session.get({ sessionID: event.sessionID }).catch(() => undefined)
+      if (session?.model?.providerID !== PROVIDER_ID) return
+      const workspace = ctx.location.directory
+      const content = event.result.content
+      if (!Array.isArray(content)) return
+      event.result.content = content.flatMap((part) => {
+        if (part.type !== "file") return [part]
+        const mime = String(part.mime ?? "").toLowerCase()
+        if (isImageMime(mime)) return [part]
+        const name = sanitizeName(String(part.name ?? "attachment"))
+        const reference = fileReference(String(part.uri ?? ""), mime, name, workspace)
+        return reference ? [{ type: "text" as const, text: reference }] : []
+      })
+    })
+
     const hidden = catalog.length - currentModels.length
     console.log(
       `[commandcode] ready: ${currentModels.length} models (plan: ${currentPlan ?? "all"}${
@@ -1021,10 +1056,18 @@ export default Plugin.define({
 
 type ContentPart = Record<string, any>
 
-/** Keep attachment file names filesystem-safe; stored names are hashed anyway. */
-function sanitizeName(name: string): string {
-  const cleaned = name.replace(/[\\/:*?"<>|\u0000-\u001f]/g, "_").trim()
-  return cleaned.length > 0 ? cleaned.slice(0, 120) : "attachment"
+/**
+ * Keep attachment file names filesystem-safe. Tool results carry the full path the file
+ * was read from, so take the basename first; stored names are hashed anyway.
+ */
+export function sanitizeName(name: string): string {
+  const base = name.split(/[\\/]/).pop() ?? name
+  const cleaned = base.replace(/[:*?"<>|\u0000-\u001f]/g, "_").trim()
+  if (cleaned.length === 0) return "attachment"
+  if (cleaned.length <= 120) return cleaned
+  const dot = cleaned.lastIndexOf(".")
+  const ext = dot > 0 && cleaned.length - dot <= 10 ? cleaned.slice(dot) : ""
+  return cleaned.slice(0, 120 - ext.length) + ext
 }
 
 function extensionFor(name: string, mime: string): string {
@@ -1057,7 +1100,7 @@ function isImageMime(mime: string): boolean {
 }
 
 /** Markdown reference the model can open itself, or null when it cannot be expressed. */
-function fileReference(uri: string, mime: string, name: string, workspace: string): string | null {
+export function fileReference(uri: string, mime: string, name: string, workspace: string): string | null {
   const dataUrl = /^data:([^;]*);base64,(.*)$/is.exec(uri)
   if (dataUrl) return `[${name}](${storeAttachment(dataUrl[2], name, mime || dataUrl[1], workspace)})`
   if (/^https?:\/\//i.test(uri)) return `[${name}](${uri})`
