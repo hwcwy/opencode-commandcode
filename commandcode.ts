@@ -53,6 +53,8 @@ const CACHE_TTL_MS = 60 * 60 * 1000
 const FETCH_TIMEOUT_MS = 10_000
 const MIN_DOCS_MODELS = 20
 const ATTACHMENT_DIR = ".opencode/attachments"
+/** DeepSeek's gateway rejects requests with more images than this, counting earlier turns. */
+const MAX_REQUEST_IMAGES = 100
 const BROWSER_UA =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36"
 
@@ -68,14 +70,15 @@ const PLAN_RANKS: Record<string, number> = { go: 1, goat: 2, pro: 3, max: 4 }
 const PLAN_FIELD = "plan"
 
 // --- generated:efforts (scripts/sync-efforts.mjs; do not edit below) ---
-// Source: command-code@1.88.4 model catalog b21583dbdf3e.
+// Source: command-code@1.91.0 model catalog 6ff9af821e9b.
 // The official CLI has no runtime API for reasoning levels: it ships this
 // catalog (id + aliases -> reasoningEfforts). Models absent from it get no
 // variants, exactly like the official client.
-const EFFORTS_SOURCE = "command-code@1.88.4"
+const EFFORTS_SOURCE = "command-code@1.91.0"
 const EFFORTS_BY_MODEL: Record<string, readonly string[]> = {
   "claude-fable-5": ["low", "medium", "high", "xhigh", "max"],
   "claude-fable-5-1": ["low", "medium", "high", "xhigh", "max"],
+  "claude-fable-5-2": ["low", "medium", "high", "xhigh", "max"],
   "claude-haiku-5-5": ["low", "medium", "high", "xhigh", "max"],
   "claude-opus-4-5-20251101": ["low", "medium", "high", "xhigh", "max"],
   "claude-opus-4-6": ["low", "medium", "high", "xhigh", "max"],
@@ -94,6 +97,7 @@ const EFFORTS_BY_MODEL: Record<string, readonly string[]> = {
   "deepseek/deepseek-v4-pro": ["off", "high", "max"],
   "deepseek/deepseek-v4.1-flash": ["off", "low", "high", "max"],
   "deepseek/deepseek-v4.1-flash-fast": ["off", "low", "high", "max"],
+  "deepseek/deepseek-v4.1-flash-ultrafast": ["off", "low", "high", "max"],
   "google/gemini-3.1-flash-lite": ["low", "medium", "high"],
   "google/gemini-3.5-flash": ["low", "medium", "high"],
   "google/gemini-3.5-flash-lite": ["low", "medium", "high"],
@@ -101,6 +105,7 @@ const EFFORTS_BY_MODEL: Record<string, readonly string[]> = {
   "google/gemini-3.7-flash": ["low", "medium", "high"],
   "google/gemini-3.8-flash": ["low", "medium", "high"],
   "google/gemini-4-argon": ["low", "medium", "high"],
+  "google/gemini-4-carbon": ["low", "medium", "high"],
   "gpt-5.3-codex": ["low", "medium", "high", "xhigh"],
   "gpt-5.4": ["low", "medium", "high", "xhigh"],
   "gpt-5.4-mini": ["low", "medium", "high"],
@@ -113,9 +118,12 @@ const EFFORTS_BY_MODEL: Record<string, readonly string[]> = {
   "gpt-6-sol": ["low", "medium", "high", "xhigh", "max"],
   "gpt-6.1-sol": ["low", "medium", "high", "xhigh", "max"],
   "gpt-6.1-terra": ["low", "medium", "high", "xhigh", "max"],
+  "gpt-6.2-astra": ["low", "medium", "high", "xhigh", "max"],
+  "gpt-6.2-sol": ["low", "medium", "high", "xhigh", "max"],
   "inclusionai/ling-3.1-flash": ["low", "medium", "high"],
   "inclusionai/ling-3.1-flash-1019": ["low", "medium", "high"],
   "inclusionai/ling-3.1-flash-1019:free": ["low", "medium", "high"],
+  "meta/muse-ember": ["low", "medium", "high", "xhigh", "max"],
   "meta/muse-spark-1.1": ["low", "medium", "high", "xhigh"],
   "meta/muse-spark-1.2": ["low", "medium", "high", "xhigh"],
   "meta/muse-spark-1.2-contributor": ["low", "medium", "high", "xhigh"],
@@ -140,12 +148,16 @@ const EFFORTS_BY_MODEL: Record<string, readonly string[]> = {
   "Qwen/Qwen3.8-Max-0902": ["low", "medium", "xhigh"],
   "Qwen/Qwen3.8-Max-Prime": ["low", "medium", "xhigh"],
   "Qwen/Qwen3.8-Omni-Flash": ["low", "medium", "xhigh"],
+  "Qwen/Qwen4-Max": ["off", "low", "high", "xhigh"],
   "reflection/beam:free": ["low", "medium", "high", "xhigh", "max"],
   "sakana/fugu-ultra": ["high", "xhigh"],
   "stealth/crouton-alpha": ["low", "medium", "high", "xhigh", "max"],
   "stealth/glyph-cluster:free": ["low", "medium", "high", "xhigh"],
   "stepfun/Step-5-Preview": ["low", "medium", "high"],
+  "tencent/hy4": ["low", "medium", "high"],
+  "tencent/hy4-flash": ["off", "high"],
   "tencent/hy4-preview": ["low", "medium", "high"],
+  "thinkingmachines/inkling-2-small:free": ["low", "medium", "high", "max"],
   "xai/grok-4.5": ["low", "medium", "high"],
   "xai/grok-4.6": ["low", "medium", "high", "xhigh"],
   "xai/grok-4.7": ["low", "medium", "high", "xhigh"],
@@ -971,7 +983,11 @@ export default Plugin.define({
     // document attachments (and documents inside tool results) become markdown file
     // references the model can open itself, and mid-conversation system-role messages
     // move into the top-level system prompt.
-    await ctx.session.hook("context", (event) => {
+    //
+    // The gateway also caps how many images one request may carry (100 on DeepSeek), counting
+    // every earlier turn. Keep only the most recent MAX_REQUEST_IMAGES and turn older ones into
+    // file references, so a long session that keeps reading screenshots still fits.
+    const prepareRequest = (event: { model?: ContentPart; messages?: unknown; system: ContentPart[] }) => {
       if (event.model?.providerID !== PROVIDER_ID) return
       const workspace = ctx.location.directory
       const messages = (event.messages ?? []) as ContentPart[]
@@ -992,6 +1008,8 @@ export default Plugin.define({
           return part
         })
       }
+
+      limitRequestImages(messages, workspace)
 
       // Replayed thinking blocks carry a signature bound to the conversation prefix. Any
       // system-prompt change (OpenCode rewrites it as tools and MCP servers change) makes the
@@ -1020,7 +1038,11 @@ export default Plugin.define({
         if (text.trim().length > 0) event.system.push({ type: "text", text })
         messages.splice(index, 1)
       }
-    })
+    }
+
+    await ctx.session.hook("context", prepareRequest)
+    // Checkpoint summaries replay the same transcript, so they hit the same limits.
+    await ctx.session.hook("compaction", prepareRequest)
 
     // The read tool stores whole documents as file parts inside the tool result. Replaying
     // such a part later crashes OpenCode while converting history (`e.uri.includes`), and
@@ -1055,6 +1077,67 @@ export default Plugin.define({
 })
 
 type ContentPart = Record<string, any>
+
+/**
+ * The gateway rejects requests that carry too many images, counting images from every earlier
+ * turn (`102 images in all; … takes at most 100 per request`). Walk the request from the newest
+ * message backwards, keep the most recent MAX_REQUEST_IMAGES images inline, and turn anything
+ * older into a markdown reference the model can reopen. Bytes stay on disk, so nothing is lost.
+ */
+export function limitRequestImages(messages: ContentPart[], workspace: string): void {
+  let kept = 0
+  for (let messageIndex = messages.length - 1; messageIndex >= 0; messageIndex--) {
+    const message = messages[messageIndex]
+    if (!Array.isArray(message?.content)) continue
+    const content = message.content as ContentPart[]
+    for (let partIndex = content.length - 1; partIndex >= 0; partIndex--) {
+      const part = content[partIndex]
+      if (!part) continue
+
+      if (part.type === "media") {
+        const mime = String(part.media?.mediaType ?? "").toLowerCase()
+        if (!isImageMime(mime)) continue
+        if (kept < MAX_REQUEST_IMAGES) {
+          kept++
+          continue
+        }
+        const name = sanitizeName(String(part.filename ?? "image"))
+        const reference = imageReference(part, mime, name, workspace)
+        // Only spend the slot budget on images we can actually rewrite; an unrewritable
+        // image has to stay inline or the request would lose it entirely.
+        if (reference) content[partIndex] = { type: "text", text: reference }
+        else kept++
+        continue
+      }
+
+      // Images read by tools travel as file parts inside a tool result.
+      if (part.type === "tool-result" && Array.isArray(part.result?.value)) {
+        const values = part.result.value as ContentPart[]
+        for (let valueIndex = values.length - 1; valueIndex >= 0; valueIndex--) {
+          const item = values[valueIndex]
+          if (!item || item.type !== "file") continue
+          const mime = String(item.mime ?? "").toLowerCase()
+          if (!isImageMime(mime)) continue
+          if (kept < MAX_REQUEST_IMAGES) {
+            kept++
+            continue
+          }
+          const name = sanitizeName(String(item.name ?? "image"))
+          const reference = fileReference(String(item.uri ?? ""), mime, name, workspace)
+          if (reference) values[valueIndex] = { type: "text", text: reference }
+          else kept++
+        }
+      }
+    }
+  }
+}
+
+/** Same as fileReference, for an image carried as a media part. */
+function imageReference(part: ContentPart, mime: string, name: string, workspace: string): string | null {
+  const source = part.media?.source ?? {}
+  const uri = typeof source.url === "string" ? source.url : typeof source.data === "string" ? source.data : ""
+  return fileReference(uri, mime, name, workspace)
+}
 
 /**
  * Keep attachment file names filesystem-safe. Tool results carry the full path the file
