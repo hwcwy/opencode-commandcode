@@ -53,15 +53,21 @@ const CACHE_TTL_MS = 60 * 60 * 1000
 const FETCH_TIMEOUT_MS = 10_000
 const MIN_DOCS_MODELS = 20
 const ATTACHMENT_DIR = ".opencode/attachments"
+/**
+ * Image limits, taken from the official CLI (`command-code`):
+ *  - `MAX_IMAGE_SOURCE_BYTES` (33,554,432) is where it refuses to attach a source image at all.
+ *  - `MAX_IMAGE_BASE64_BYTES` (5,000,000) is the compressed base64 budget it targets, retrying
+ *    JPEG quality 80 → 60 → 40 → 20.
+ * That CLI drops such images; we keep them as file references so the content is not lost.
+ * The gateway additionally caps the whole request (bytes and image count), so those stay as
+ * request-level guards.
+ */
+const MAX_IMAGE_SOURCE_BYTES = 33_554_432
+const MAX_IMAGE_BASE64_BYTES = 5_000_000
 /** DeepSeek's gateway rejects requests with more images than this, counting earlier turns. */
 const MAX_REQUEST_IMAGES = 100
-/**
- * The same gateway caps total request bytes (33,554,432 for DeepSeek, text included) after
- * re-encoding images as JPEG. Keep a margin for text and for the encoder growing images.
- */
+/** Request-level byte budget, well under the gateway's 33,554,432 so text and re-encoding fit. */
 const MAX_IMAGE_TOTAL_BYTES = 24 * 1024 * 1024
-/** A single image larger than this cannot be sent inline at all. */
-const MAX_IMAGE_BYTES = 8 * 1024 * 1024
 const BROWSER_UA =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36"
 
@@ -77,11 +83,11 @@ const PLAN_RANKS: Record<string, number> = { go: 1, goat: 2, pro: 3, max: 4 }
 const PLAN_FIELD = "plan"
 
 // --- generated:efforts (scripts/sync-efforts.mjs; do not edit below) ---
-// Source: command-code@1.91.0 model catalog 6ff9af821e9b.
+// Source: command-code@1.92.0 model catalog f2dd711d7361.
 // The official CLI has no runtime API for reasoning levels: it ships this
 // catalog (id + aliases -> reasoningEfforts). Models absent from it get no
 // variants, exactly like the official client.
-const EFFORTS_SOURCE = "command-code@1.91.0"
+const EFFORTS_SOURCE = "command-code@1.92.0"
 const EFFORTS_BY_MODEL: Record<string, readonly string[]> = {
   "claude-fable-5": ["low", "medium", "high", "xhigh", "max"],
   "claude-fable-5-1": ["low", "medium", "high", "xhigh", "max"],
@@ -113,6 +119,7 @@ const EFFORTS_BY_MODEL: Record<string, readonly string[]> = {
   "google/gemini-3.8-flash": ["low", "medium", "high"],
   "google/gemini-4-argon": ["low", "medium", "high"],
   "google/gemini-4-carbon": ["low", "medium", "high"],
+  "google/gemini-4-neon": ["low", "medium", "high", "xhigh"],
   "gpt-5.3-codex": ["low", "medium", "high", "xhigh"],
   "gpt-5.4": ["low", "medium", "high", "xhigh"],
   "gpt-5.4-mini": ["low", "medium", "high"],
@@ -1093,7 +1100,7 @@ type ContentPart = Record<string, any>
  */
 export function limitRequestImages(messages: ContentPart[], workspace: string): void {
   let kept = 0
-  let keptBytes = 0
+  let keptBase64 = 0
   for (let messageIndex = messages.length - 1; messageIndex >= 0; messageIndex--) {
     const message = messages[messageIndex]
     if (!Array.isArray(message?.content)) continue
@@ -1105,10 +1112,10 @@ export function limitRequestImages(messages: ContentPart[], workspace: string): 
       if (part.type === "media") {
         const mime = String(part.media?.mediaType ?? "").toLowerCase()
         if (!isImageMime(mime)) continue
-        const bytes = mediaBytes(part)
-        if (fitsImageBudget(kept, keptBytes, bytes)) {
+        const length = mediaBase64Length(part)
+        if (fitsImageBudget(kept, keptBase64, length)) {
           kept++
-          keptBytes += bytes
+          keptBase64 += Math.ceil((length * 3) / 4)
           continue
         }
         const name = sanitizeName(String(part.filename ?? "image"))
@@ -1118,7 +1125,7 @@ export function limitRequestImages(messages: ContentPart[], workspace: string): 
         if (reference) content[partIndex] = { type: "text", text: reference }
         else {
           kept++
-          keptBytes += bytes
+          keptBase64 += Math.ceil((length * 3) / 4)
         }
         continue
       }
@@ -1131,10 +1138,10 @@ export function limitRequestImages(messages: ContentPart[], workspace: string): 
           if (!item || item.type !== "file") continue
           const mime = String(item.mime ?? "").toLowerCase()
           if (!isImageMime(mime)) continue
-          const bytes = uriBytes(String(item.uri ?? ""))
-          if (fitsImageBudget(kept, keptBytes, bytes)) {
+          const length = uriBase64Length(String(item.uri ?? ""))
+          if (fitsImageBudget(kept, keptBase64, length)) {
             kept++
-            keptBytes += bytes
+            keptBase64 += Math.ceil((length * 3) / 4)
             continue
           }
           const name = sanitizeName(String(item.name ?? "image"))
@@ -1142,7 +1149,7 @@ export function limitRequestImages(messages: ContentPart[], workspace: string): 
           if (reference) values[valueIndex] = { type: "text", text: reference }
           else {
             kept++
-            keptBytes += bytes
+            keptBase64 += Math.ceil((length * 3) / 4)
           }
         }
       }
@@ -1150,30 +1157,32 @@ export function limitRequestImages(messages: ContentPart[], workspace: string): 
   }
 }
 
-/** Images must satisfy both the count cap and the request-size cap. */
-function fitsImageBudget(kept: number, keptBytes: number, bytes: number): boolean {
+/** Images must satisfy the count cap, the per-image cap and the request-size cap. */
+function fitsImageBudget(kept: number, keptBase64: number, base64Length: number): boolean {
   if (kept >= MAX_REQUEST_IMAGES) return false
-  if (bytes > MAX_IMAGE_BYTES) return false
-  return keptBytes + bytes <= MAX_IMAGE_TOTAL_BYTES
+  // Official CLI cap: an image whose (compressed) base64 exceeds this is not attached.
+  if (base64Length > MAX_IMAGE_BASE64_BYTES) return false
+  // Official CLI cap on the source image itself, before it is re-encoded.
+  if (Math.floor((base64Length * 3) / 4) > MAX_IMAGE_SOURCE_BYTES) return false
+  // Total request budget, kept under the gateway's 33,554,432 for text and re-encoding.
+  return keptBase64 + Math.ceil((base64Length * 3) / 4) <= MAX_IMAGE_TOTAL_BYTES
 }
 
-/** Approximate decoded size of a media part's payload. */
-function mediaBytes(part: ContentPart): number {
+/**
+ * Base64 length of the image payload, which is the unit the official CLI budgets against
+ * (`compressedBase64.length > 5e6`). Inline URIs are measured as the base64 they carry.
+ */
+function mediaBase64Length(part: ContentPart): number {
   const source = part.media?.source ?? {}
-  return typeof source.data === "string" ? base64Bytes(source.data) : 0
+  return typeof source.data === "string" ? source.data.replace(/\s+/g, "").length : 0
 }
 
-/** Approximate decoded size of a data: or inline-base64 URI. */
-function uriBytes(uri: string): number {
+function uriBase64Length(uri: string): number {
   const dataUrl = /^data:[^;]*;base64,(.*)$/is.exec(uri)
-  if (dataUrl) return base64Bytes(dataUrl[1])
+  if (dataUrl) return dataUrl[1].replace(/\s+/g, "").length
   if (uri.startsWith("data:")) return uri.length
   if (/^https?:\/\//i.test(uri)) return 0
-  return base64Bytes(uri)
-}
-
-function base64Bytes(value: string): number {
-  return Math.floor((value.replace(/\s+/g, "").length * 3) / 4)
+  return uri.replace(/\s+/g, "").length
 }
 
 /** Same as fileReference, for an image carried as a media part. */
