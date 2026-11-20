@@ -17,7 +17,7 @@ and an effect or setup function.`）。本插件用 V2 插件 API 重新实现�
 | 模型目录（官方 API） | 拉取 `api.commandcode.ai/provider/v1/models`，决定**有哪些模型**、上下文长度与可用端点（Claude 走 Messages，其余走 chat/completions） |
 | 能力/价格（官方文档） | 解析官方文档页内嵌的整份目录 JSON：`vision` / `reasoning`、上下文、官方价格（含长上下文分档）、发布时间、**最低套餐** |
 | 思考等级 | 官方 CLI 目录的 `reasoningEfforts` → OpenCode `variants`：Claude 走 `effort`（`output_config.effort`），其余走 `reasoningEffort`（`reasoning_effort`）；启动时自动拉最新（24h 缓存） |
-| 图片上限 | 网关单请求最多 100 张图片（含历史轮次）。`context` / `compaction` 钩子只保留最近 100 张，更早的图转为文件引用（落盘可重新打开） |
+| 图片上限 | 网关单请求既限张数（100）也限总字节（约 32MB，按 JPEG 重算）。`context` / `compaction` 钩子按"最近优先"只保留能装下的图片，其余转为文件引用（落盘可重新打开） |
 | 订阅过滤 | 连接 API Key 时表单里有「Subscription plan」选择器（或 `COMMANDCODE_PLAN`），按官方 `minPlanName` 隐藏高于你套餐的模型 |
 | 离线兜底 | 拉取失败复用上次成功缓存（插件 storage，1 小时 TTL） |
 | 凭据集成 | 注册 `commandcode` 集成，支持 API Key（`/connect`）与环境变量两种方式 |

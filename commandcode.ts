@@ -55,6 +55,13 @@ const MIN_DOCS_MODELS = 20
 const ATTACHMENT_DIR = ".opencode/attachments"
 /** DeepSeek's gateway rejects requests with more images than this, counting earlier turns. */
 const MAX_REQUEST_IMAGES = 100
+/**
+ * The same gateway caps total request bytes (33,554,432 for DeepSeek, text included) after
+ * re-encoding images as JPEG. Keep a margin for text and for the encoder growing images.
+ */
+const MAX_IMAGE_TOTAL_BYTES = 24 * 1024 * 1024
+/** A single image larger than this cannot be sent inline at all. */
+const MAX_IMAGE_BYTES = 8 * 1024 * 1024
 const BROWSER_UA =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36"
 
@@ -1086,6 +1093,7 @@ type ContentPart = Record<string, any>
  */
 export function limitRequestImages(messages: ContentPart[], workspace: string): void {
   let kept = 0
+  let keptBytes = 0
   for (let messageIndex = messages.length - 1; messageIndex >= 0; messageIndex--) {
     const message = messages[messageIndex]
     if (!Array.isArray(message?.content)) continue
@@ -1097,16 +1105,21 @@ export function limitRequestImages(messages: ContentPart[], workspace: string): 
       if (part.type === "media") {
         const mime = String(part.media?.mediaType ?? "").toLowerCase()
         if (!isImageMime(mime)) continue
-        if (kept < MAX_REQUEST_IMAGES) {
+        const bytes = mediaBytes(part)
+        if (fitsImageBudget(kept, keptBytes, bytes)) {
           kept++
+          keptBytes += bytes
           continue
         }
         const name = sanitizeName(String(part.filename ?? "image"))
         const reference = imageReference(part, mime, name, workspace)
-        // Only spend the slot budget on images we can actually rewrite; an unrewritable
-        // image has to stay inline or the request would lose it entirely.
+        // Only spend the budget on images we can actually rewrite; an unrewritable image
+        // has to stay inline or the request would lose it entirely.
         if (reference) content[partIndex] = { type: "text", text: reference }
-        else kept++
+        else {
+          kept++
+          keptBytes += bytes
+        }
         continue
       }
 
@@ -1118,18 +1131,49 @@ export function limitRequestImages(messages: ContentPart[], workspace: string): 
           if (!item || item.type !== "file") continue
           const mime = String(item.mime ?? "").toLowerCase()
           if (!isImageMime(mime)) continue
-          if (kept < MAX_REQUEST_IMAGES) {
+          const bytes = uriBytes(String(item.uri ?? ""))
+          if (fitsImageBudget(kept, keptBytes, bytes)) {
             kept++
+            keptBytes += bytes
             continue
           }
           const name = sanitizeName(String(item.name ?? "image"))
           const reference = fileReference(String(item.uri ?? ""), mime, name, workspace)
           if (reference) values[valueIndex] = { type: "text", text: reference }
-          else kept++
+          else {
+            kept++
+            keptBytes += bytes
+          }
         }
       }
     }
   }
+}
+
+/** Images must satisfy both the count cap and the request-size cap. */
+function fitsImageBudget(kept: number, keptBytes: number, bytes: number): boolean {
+  if (kept >= MAX_REQUEST_IMAGES) return false
+  if (bytes > MAX_IMAGE_BYTES) return false
+  return keptBytes + bytes <= MAX_IMAGE_TOTAL_BYTES
+}
+
+/** Approximate decoded size of a media part's payload. */
+function mediaBytes(part: ContentPart): number {
+  const source = part.media?.source ?? {}
+  return typeof source.data === "string" ? base64Bytes(source.data) : 0
+}
+
+/** Approximate decoded size of a data: or inline-base64 URI. */
+function uriBytes(uri: string): number {
+  const dataUrl = /^data:[^;]*;base64,(.*)$/is.exec(uri)
+  if (dataUrl) return base64Bytes(dataUrl[1])
+  if (uri.startsWith("data:")) return uri.length
+  if (/^https?:\/\//i.test(uri)) return 0
+  return base64Bytes(uri)
+}
+
+function base64Bytes(value: string): number {
+  return Math.floor((value.replace(/\s+/g, "").length * 3) / 4)
 }
 
 /** Same as fileReference, for an image carried as a media part. */
