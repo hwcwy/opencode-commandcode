@@ -59,15 +59,20 @@ const ATTACHMENT_DIR = ".opencode/attachments"
  *  - `MAX_IMAGE_BASE64_BYTES` (5,000,000) is the compressed base64 budget it targets, retrying
  *    JPEG quality 80 → 60 → 40 → 20.
  * That CLI drops such images; we keep them as file references so the content is not lost.
- * The gateway additionally caps the whole request (bytes and image count), so those stay as
- * request-level guards.
+ *
+ * The gateway measures a request after re-encoding every image as JPEG, which inflates PNG
+ * screenshots: a session with 22.44MB of base64 images was billed as 33.92MB, a 1.51x factor.
+ * Request budgeting therefore estimates `base64 × GATEWAY_IMAGE_INFLATION` against
+ * `MAX_IMAGE_TOTAL_BYTES`, both chosen to stay under the gateway's 33,554,432 with headroom.
  */
 const MAX_IMAGE_SOURCE_BYTES = 33_554_432
 const MAX_IMAGE_BASE64_BYTES = 5_000_000
 /** DeepSeek's gateway rejects requests with more images than this, counting earlier turns. */
 const MAX_REQUEST_IMAGES = 100
-/** Request-level byte budget, well under the gateway's 33,554,432 so text and re-encoding fit. */
-const MAX_IMAGE_TOTAL_BYTES = 24 * 1024 * 1024
+/** Measured inflation when the gateway re-encodes PNG screenshots as JPEG. */
+const GATEWAY_IMAGE_INFLATION = 1.6
+/** Request-level byte budget after dividing by the inflation factor. */
+const MAX_IMAGE_TOTAL_BYTES = 19 * 1024 * 1024
 const BROWSER_UA =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36"
 
@@ -1115,7 +1120,7 @@ export function limitRequestImages(messages: ContentPart[], workspace: string): 
         const length = mediaBase64Length(part)
         if (fitsImageBudget(kept, keptBase64, length)) {
           kept++
-          keptBase64 += Math.ceil((length * 3) / 4)
+          keptBase64 += length * GATEWAY_IMAGE_INFLATION
           continue
         }
         const name = sanitizeName(String(part.filename ?? "image"))
@@ -1125,7 +1130,7 @@ export function limitRequestImages(messages: ContentPart[], workspace: string): 
         if (reference) content[partIndex] = { type: "text", text: reference }
         else {
           kept++
-          keptBase64 += Math.ceil((length * 3) / 4)
+          keptBase64 += length * GATEWAY_IMAGE_INFLATION
         }
         continue
       }
@@ -1141,7 +1146,7 @@ export function limitRequestImages(messages: ContentPart[], workspace: string): 
           const length = uriBase64Length(String(item.uri ?? ""))
           if (fitsImageBudget(kept, keptBase64, length)) {
             kept++
-            keptBase64 += Math.ceil((length * 3) / 4)
+            keptBase64 += length * GATEWAY_IMAGE_INFLATION
             continue
           }
           const name = sanitizeName(String(item.name ?? "image"))
@@ -1149,7 +1154,7 @@ export function limitRequestImages(messages: ContentPart[], workspace: string): 
           if (reference) values[valueIndex] = { type: "text", text: reference }
           else {
             kept++
-            keptBase64 += Math.ceil((length * 3) / 4)
+            keptBase64 += length * GATEWAY_IMAGE_INFLATION
           }
         }
       }
@@ -1164,8 +1169,8 @@ function fitsImageBudget(kept: number, keptBase64: number, base64Length: number)
   if (base64Length > MAX_IMAGE_BASE64_BYTES) return false
   // Official CLI cap on the source image itself, before it is re-encoded.
   if (Math.floor((base64Length * 3) / 4) > MAX_IMAGE_SOURCE_BYTES) return false
-  // Total request budget, kept under the gateway's 33,554,432 for text and re-encoding.
-  return keptBase64 + Math.ceil((base64Length * 3) / 4) <= MAX_IMAGE_TOTAL_BYTES
+  // Budget in the gateway's units: it re-encodes to JPEG, which inflates PNG screenshots.
+  return keptBase64 + base64Length * GATEWAY_IMAGE_INFLATION <= MAX_IMAGE_TOTAL_BYTES
 }
 
 /**
